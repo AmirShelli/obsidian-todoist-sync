@@ -1,14 +1,48 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
 
-// Remember to rename these classes and interfaces!
+const TODOIST_API_TOKEN = "dfea4afd7bd50ba82d850f12b30850c5eff6a2a9"; // Replace with your actual API token
+
+// Function to get today's date in the correct format (YYYY-MM-DDTHH:mm)
+function getTodayDate() {
+	const today = new Date();
+	return `${today.toISOString().split("T")[0]}T00:00`;
+}
+
+// Function to fetch completed tasks from Todoist for today
+async function getCompletedTasksForToday() {
+	const todayDate = getTodayDate();
+	const response = await fetch(
+		`https://api.todoist.com/sync/v9/completed/get_all?since=${todayDate}`,
+		{
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${TODOIST_API_TOKEN}`,
+			},
+		}
+	);
+
+	if (response.ok) {
+		const data = await response.json();
+		return data.items || []; // Ensure you return items or an empty array
+	} else {
+		console.error(
+			"Failed to fetch completed tasks",
+			response.status,
+			await response.text()
+		);
+		return [];
+	}
+}
 
 interface MyPluginSettings {
 	mySetting: string;
+	processedTaskIds: string[]; // Add this to store processed task IDs
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
+	mySetting: "default",
+	processedTaskIds: [], // Initialize with an empty array
+};
 
 export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
@@ -16,94 +50,105 @@ export default class MyPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+		this.registerInterval(
+			window.setInterval(async () => {
+				const tasks = await getCompletedTasksForToday();
+				new Notice("hello " + JSON.stringify(tasks));
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+				tasks.forEach(
+					async (task: {
+						id: any;
+						content: any;
+						subtasks: never[];
+					}) => {
+						const taskId = task.id;
+						// Check if the task is already processed
+						if (!this.settings.processedTaskIds.includes(taskId)) {
+							const taskName = task.content;
+							const subtasks = task.subtasks || []; // If there are subtasks
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
+							// Create markdown page for the task with ID and link
+							await this.createTaskPage(
+								taskName,
+								subtasks,
+								taskId
+							);
+
+							// Mark the task as processed
+							this.settings.processedTaskIds.push(taskId);
+							await this.saveSettings();
+						}
 					}
+				);
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+				new Notice("Completed tasks for today updated.");
+			}, 10 * 1000) // 10 seconds interval
+		);
+
+		// Load the first batch of tasks immediately on load
+		const tasks = await getCompletedTasksForToday();
+		tasks.forEach(
+			async (task: { id: any; content: any; subtasks: never[] }) => {
+				const taskId = task.id;
+
+				if (!this.settings.processedTaskIds.includes(taskId)) {
+					const taskName = task.content;
+					const subtasks = task.subtasks || [];
+
+					await this.createTaskPage(taskName, subtasks, taskId);
+
+					this.settings.processedTaskIds.push(taskId);
+					await this.saveSettings();
 				}
 			}
-		});
+		);
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+		new Notice("Fetched today's completed tasks");
 	}
 
-	onunload() {
+	// Function to create a markdown page for a task
+	async createTaskPage(
+		taskName: string,
+		subtasks: Array<any>,
+		taskId: string
+	) {
+		// Create the content for the task page
+		let pageContent = `# ${taskName}\n\n`;
 
+		// Add a link to the Todoist task using its ID
+		const taskUrl = `https://todoist.com/showTask?id=${taskId}`;
+		pageContent += `- [Open in Todoist](${taskUrl})\n\n`;
+
+		// Add any subtasks, if they exist
+		if (subtasks.length > 0) {
+			pageContent += `## Subtasks:\n`;
+			subtasks.forEach((subtask) => {
+				pageContent += `- ${subtask.content}\n`;
+			});
+		}
+
+		// Use Obsidian's file system to create a new file
+		const fileName = `${taskName.replace(/[^a-zA-Z0-9]/g, "_")}.md`; // Sanitize file name
+		const filePath = `Tasks/${fileName}`; // Customize the folder path
+
+		// Create the file with the generated content
+		await this.app.vault.create(filePath, pageContent);
+
+		new Notice(`Created task file: ${fileName}`);
 	}
+
+	onunload() {}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign(
+			{},
+			DEFAULT_SETTINGS,
+			await this.loadData()
+		);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
 	}
 }
 
@@ -116,19 +161,21 @@ class SampleSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		const { containerEl } = this;
 
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
+			.setName("Setting #1")
+			.setDesc("It's a secret")
+			.addText((text) =>
+				text
+					.setPlaceholder("Enter your secret")
+					.setValue(this.plugin.settings.mySetting)
+					.onChange(async (value) => {
+						this.plugin.settings.mySetting = value;
+						await this.plugin.saveSettings();
+					})
+			);
 	}
 }

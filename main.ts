@@ -1,6 +1,8 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
+import * as dotenv from 'dotenv';
 
-const TODOIST_API_TOKEN = "dfea4afd7bd50ba82d850f12b30850c5eff6a2a9"; // Replace with your actual API token
+dotenv.config();
+const TODOIST_API_TOKEN = process.env.TODOIST_API_TOKEN; // Replace with your actual API token
 
 // Function to get today's date in the correct format (YYYY-MM-DDTHH:mm)
 function getTodayDate() {
